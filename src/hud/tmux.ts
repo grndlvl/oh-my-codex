@@ -1,6 +1,4 @@
 import { execFileSync } from 'child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { HUD_TMUX_HEIGHT_LINES } from './constants.js';
 import { resolveTmuxBinaryForPlatform } from '../utils/platform-command.js';
 
@@ -185,22 +183,32 @@ export function resizeTmuxPane(
   }
 }
 
-export function buildHudResizeScript(heightLines: number): string {
-  const h = String(Math.max(1, Math.floor(heightLines)));
-  return `#!/bin/sh\ntmux list-panes -F "#{pane_id} #{pane_start_command}" 2>/dev/null | grep "hud.*--watch" | awk '{print $1}' | while read -r id; do tmux resize-pane -t "$id" -y ${h} 2>/dev/null; done\n`;
-}
-
-export function writeHudResizeScript(scriptPath: string, heightLines: number): void {
-  mkdirSync(dirname(scriptPath), { recursive: true });
-  writeFileSync(scriptPath, buildHudResizeScript(heightLines), { mode: 0o755 });
-}
-
 export function registerHudResizeHook(
-  scriptPath: string,
+  hudPaneId: string,
+  currentPaneId: string | undefined,
+  heightLines: number,
   execTmuxSync: TmuxExecSync = defaultExecTmuxSync,
 ): boolean {
+  if (!hudPaneId.startsWith('%')) return false;
+  const tmuxBin = resolveTmuxBinaryForPlatform() || 'tmux';
+  const height = String(Math.max(1, Math.floor(heightLines)));
+  const resizeCmd = shellEscapeSingle(`${tmuxBin} resize-pane -t ${hudPaneId} -y ${height} 2>/dev/null || true`);
+  const scopeArgs = currentPaneId?.startsWith('%') ? ['-t', currentPaneId] : ['-g'];
   try {
-    execTmuxSync(['set-hook', '-g', 'client-resized[99]', `run-shell -b ${shellEscapeSingle(scriptPath)}`]);
+    execTmuxSync(['set-hook', ...scopeArgs, 'client-resized', `run-shell -b ${resizeCmd}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function unregisterHudResizeHook(
+  currentPaneId: string | undefined,
+  execTmuxSync: TmuxExecSync = defaultExecTmuxSync,
+): boolean {
+  const scopeArgs = currentPaneId?.startsWith('%') ? ['-t', currentPaneId] : ['-g'];
+  try {
+    execTmuxSync(['set-hook', '-u', ...scopeArgs, 'client-resized']);
     return true;
   } catch {
     return false;
